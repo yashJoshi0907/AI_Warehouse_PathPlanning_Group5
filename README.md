@@ -121,7 +121,8 @@ AI_Warehouse_PathPlanning_Group5/
 ├── trolley_replanning.py      # Dynamic trolley obstacle detection & online A* replanning
 ├── metrics.py                 # Performance tables, metrics aggregation, findings summary
 ├── visualization.py           # Matplotlib grid plotting, route overlays, charts
-├── main.py                    # Complete end-to-end demonstration script
+├── gui.py                     # Interactive Tkinter GUI & real-time animation application
+├── main.py                    # Complete end-to-end demonstration script (CLI & --gui)
 ├── tests.py                   # Comprehensive unit and integration test suite
 ├── requirements.txt           # Python library dependencies
 ├── README.md                  # Complete project documentation & reports
@@ -141,13 +142,24 @@ AI_Warehouse_PathPlanning_Group5/
 - Libraries specified in `requirements.txt`:
   - `numpy>=1.24.0`
   - `matplotlib>=3.7.0`
+- `tkinter` (included in standard Python installation)
 
 Install dependencies using:
 ```bash
 pip install -r requirements.txt
 ```
 
-### 7.2 Running the Full Demonstration
+### 7.2 Running the Interactive GUI & Animation Application
+To open the graphical interactive window with live robot movement, algorithm selection, click-to-edit grid cells, and real-time trolley replanning:
+```bash
+python gui.py
+```
+Or via the main launcher:
+```bash
+python main.py --gui
+```
+
+### 7.3 Running the Full CLI Demonstration
 Execute `main.py` from the project root:
 ```bash
 python main.py
@@ -162,7 +174,7 @@ This executes:
 5. Performance metric comparison table printing.
 6. Export of high-resolution plots to `screenshots/`.
 
-### 7.3 Running the Test Suite
+### 7.4 Running the Test Suite
 Run the automated test suite with standard `unittest`:
 ```bash
 python -m unittest tests.py -v

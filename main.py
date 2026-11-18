@@ -195,6 +195,16 @@ def section5_metrics_and_viz(grid: WarehouseGrid,
 # ===========================================================================
 
 def main() -> None:
+    if "--gui" in sys.argv:
+        try:
+            import gui
+            print("Launching Interactive GUI Application...")
+            gui.main()
+            return
+        except Exception as e:
+            print(f"Error launching GUI: {e}")
+            sys.exit(1)
+
     print("\n" + "█" * 65)
     print("  AI-BASED ROUTE PLANNING FOR A WAREHOUSE DELIVERY ROBOT")
     print("  Group 5 — BT24CSD024 / 028 / 029 / 031 / 032 / 033")
@@ -214,6 +224,7 @@ def main() -> None:
 
     print("=" * 65)
     print("  Demo complete. See screenshots/ for visual output.")
+    print("  Tip: Run 'python gui.py' or 'python main.py --gui' to launch the interactive window!")
     print("=" * 65 + "\n")
 
 
