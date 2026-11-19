@@ -1,242 +1,126 @@
-# Task 4 — Obstacle Detection & Replanning
+# Task 4 — Trolley Detection and Replanning
 
-**Assigned To:** Piyush Mangalam (BT24CSD032)  
-**Source File:** [`trolley_replanning.py`](../trolley_replanning.py)  
-**Objective:** Simulate the robot encountering a dynamic trolley obstacle on its planned A* route. The robot detects the obstacle before entering the blocked cell, updates its internal map, replans with A* from its current position, and reports the revised route — or declares the goal unreachable if no alternative exists.
-
----
-
-## 4.1 Overview
-
-In a real warehouse, the robot may encounter unexpected obstacles (e.g., parked trolleys, spilled goods, temporary barriers) that were not part of its original map. This task simulates this scenario:
-
-1. The robot plans an initial optimal path using A* on its **known** (clean) map.
-2. A trolley (`T`) is secretly placed on a cell along that planned path in the **real world**, but the robot's internal map does not know about it.
-3. The robot begins traversing its plan step by step.
-4. Before entering each cell, the robot's forward sensor performs a **one-step lookahead** check.
-5. If the next cell is blocked by a trolley: the robot **halts**, **updates its internal map** (marks the cell as impassable), and **replans** using A* from its current position.
-6. If a viable alternative route exists, the robot follows the new plan. If not, the robot reports that the destination is unreachable.
+**Assigned To:** Piyush Mangalam (BT24CSD032)
+**Source File:** [`trolley_replanning.py`](../trolley_replanning.py)
+**Objective:** Simulate a trolley that is missing from the robot's map but blocks its planned
+route. The robot must detect it before entering the cell, update its map, replan with A\* from
+its current position, follow the new route — or report that no alternative exists.
 
 ---
 
-## 4.2 System Architecture
+## 4.1 Why three maps
 
-The trolley replanning system consists of two classes:
+The core of the task is a difference in *knowledge*, not in geometry. The simulator therefore
+keeps three grids:
 
-### `TrolleySimulator` — Simulation Engine
+| Grid | Meaning | Trolleys |
+|---|---|---|
+| `base_grid` | Reference copy of the floor plan | none |
+| `known_grid` | What the robot believes; updated when it sees an obstacle | added on detection |
+| `real_grid` | Ground truth used by the "sensor" | placed at construction |
 
-Manages three separate grid instances:
+Planning uses `known_grid`, detection compares the next cell against `real_grid`. Nothing else
+in the code has to model partial observability — the three maps *are* the model.
 
-| Grid | Purpose | Trolley knowledge |
-|------|---------|-------------------|
-| `base_grid` | Original clean grid (reference copy) | No trolleys |
-| `known_grid` | Robot's internal map (evolves during simulation) | Trolleys added when detected |
-| `real_grid` | The "physical" world (ground truth) | Trolleys placed at initialisation |
+```python
+self.base_grid  = base_grid.clone()
+self.known_grid = base_grid.clone()
+self.real_grid  = base_grid.clone()
+init = astar(self.known_grid)              # plan on clean knowledge
+for r, c in self.trolley_positions:
+    self.real_grid.mark_impassable(r, c)   # hide the obstacle in the world
+```
 
-This separation models the **partial observability** of the real world: the robot can only see one step ahead and discovers obstacles through its sensors, not through prior knowledge.
+---
 
-### `ReplanEvent` — Event Record
-
-Captures the details of each replanning episode:
+## 4.2 API
 
 ```python
 class ReplanEvent:
-    replan_no: int           # Sequential replan number
-    detected_at: (r, c)      # Cell where the trolley was found
-    current_pos: (r, c)      # Robot's position when it detected the obstacle
-    new_path: List or None   # Replanned path (None if unreachable)
-    search_result: SearchResult  # Full A* search result for the replan
-```
+    replan_no: int                     # 1, 2, …
+    detected_at: Tuple[int, int]       # cell found blocked
+    current_pos: Tuple[int, int]       # where the robot stood when it saw it
+    new_path: Optional[List[...]]      # None when unreachable
+    search_result: SearchResult        # cost, nodes, timing of the replan
 
-### `SimulationResult` — Output Container
-
-```python
 class SimulationResult:
-    initial_path: List       # Original A* plan
-    initial_result: SearchResult
-    final_trace: List        # Actual cells the robot visited
-    replan_events: List[ReplanEvent]
-    replan_count: int        # Total number of replanning episodes
-    goal_reached: bool       # Whether the robot made it to G
-    trolley_positions: List  # Where trolleys were placed
+    initial_path, initial_result, final_trace, replan_events,
+    replan_count, goal_reached, trolley_positions
 ```
+
+`TrolleySimulator(base_grid, trolley_positions=None)` auto-places one trolley on the fourth
+cell of the initial A\* plan when no positions are given, so the demo always exercises a
+replan. Custom positions, including several, are supported.
 
 ---
 
-## 4.3 Simulation Workflow
+## 4.3 Workflow
 
 ```mermaid
 flowchart TD
-    A["Run initial A* on known_grid"] --> B["Place trolley(s) on real_grid<br/>(hidden from robot)"]
-    B --> C["Robot starts at S"]
-    C --> D{"Next cell on plan?"}
-    D --> E["One-step lookahead:<br/>Check real_grid cell"]
-    E --> F{"Trolley<br/>detected?"}
-    F -- No --> G["Move to next cell<br/>Update position"]
-    G --> H{"At goal?"}
-    H -- No --> D
-    H -- Yes --> I["✓ GOAL REACHED"]
-    F -- Yes --> J["HALT at current position"]
-    J --> K["Mark cell as 'T' in known_grid"]
-    K --> L["Replan: A* from current position"]
-    L --> M{"New path<br/>found?"}
-    M -- Yes --> N["Switch to new plan"]
-    N --> D
-    M -- No --> O["✗ GOAL UNREACHABLE"]
+    A["Plan with A* on known_grid"] --> B["Hide trolley(s) in real_grid"]
+    B --> C["Robot steps along the plan"]
+    C --> D{"Next cell free in real_grid?"}
+    D -- yes --> E["Move; update trace"]
+    E --> F{"At goal?"}
+    F -- no --> C
+    F -- yes --> G["Delivered"]
+    D -- no --> H["Halt at current cell"]
+    H --> I["Mark cell impassable in known_grid"]
+    I --> J["A* from current position"]
+    J --> K{"Path found?"}
+    K -- yes --> C
+    K -- no --> L["Report destination unreachable"]
 ```
+
+Two details make this *online* replanning rather than re-planning from scratch:
+
+* the search starts at the robot's current cell (`start_override`), never at `S`;
+* the robot keeps the cells it already traversed — `final_trace` records the whole executed
+  route, not just the last plan.
 
 ---
 
-## 4.4 Detailed Step-by-Step Process
+## 4.4 Measured run on the default grid
 
-### Step 1: Initial Planning
+The trolley is placed at (3,0), the fourth cell of the initial plan, and is invisible to the
+robot.
 
-```python
-init_result = astar(self.known_grid)
-self.initial_path = init_result.path
+```text
+Initial A* plan : (0,0) → (1,0) → … → (9,0) → (9,1) … (9,5) → (8,5) → (8,6) → (8,7)
+                  → (9,7) → (9,8) → (9,9)
+Initial cost    : 20.0 (20 moves)
 ```
 
-The robot computes an optimal A* path on its clean internal map. For the default grid, this produces a 20-move path with cost 20.0:
+| Event | Detail |
+|---|---|
+| Detection | (3,0), while the robot stands at (2,0) — before entering |
+| Map update | (3,0) marked impassable in `known_grid` |
+| Replan | 16 moves, cost 19.0, 34 nodes expanded |
+| Executed route | 18 moves, 1 replan |
+| Outcome | **goal reached** |
 
-```
-(0,0) → (1,0) → (2,0) → (3,0) → (4,0) → (5,0) → (6,0) → (7,0) →
-(8,0) → (9,0) → (9,1) → (9,2) → (9,3) → (9,4) → (9,5) → (8,5) →
-(8,6) → (8,7) → (9,7) → (9,8) → (9,9)
-```
+The replanned route pivots right at row 2, runs along row 3, drops down column 6 and rejoins
+the original approach:
 
-### Step 2: Trolley Placement
-
-A trolley is placed on the **4th cell** of the initial path (index 3), which is cell $(3, 0)$. This is done only in `real_grid`, not in `known_grid`.
-
-```python
-# Place trolleys in the real world only
-for r, c in self.trolley_positions:
-    self.real_grid.mark_impassable(r, c)
-```
-
-### Step 3: Traversal with Lookahead
-
-The robot advances one cell at a time along its plan. Before entering each next cell, the **one-step lookahead sensor** checks the real world:
-
-```python
-# ---- One-step lookahead detection ----
-if self.real_grid.cell(nr, nc) == TROLLEY and \
-   self.known_grid.cell(nr, nc) != TROLLEY:
-    # Detection event!
-```
-
-**Key semantics:**
-- The robot checks `real_grid` (physical truth) for the actual cell state.
-- It compares against `known_grid` (its internal map) to avoid re-detecting the same obstacle.
-- Detection happens **before** the robot enters the blocked cell — the robot stays at its current position.
-
-### Step 4: Map Update & Replanning
-
-Upon detecting a trolley at $(3, 0)$, the robot:
-
-1. **Halts** at its current position $(2, 0)$ (the cell before the obstacle).
-2. **Updates its internal map:**
-   ```python
-   self.known_grid.mark_impassable(nr, nc)  # Mark (3,0) as 'T'
-   ```
-3. **Replans** from its current position:
-   ```python
-   new_result = astar(self.known_grid, start_override=current_pos)
-   ```
-   The `start_override` parameter tells A* to begin the search from $(2, 0)$ instead of the original start $(0, 0)$.
-
-4. **Evaluates the result:**
-   - If `new_result.path` is not `None` → switch to the new plan and continue.
-   - If `new_result.path` is `None` → report that the goal is unreachable and stop.
-
----
-
-## 4.5 Actual Simulation Results
-
-### Trolley Placement
-
-```
-Trolley placed at: (3, 0)
-```
-
-Cell $(3, 0)$ lies directly on the initial A* path. It is the 4th cell in the route (after the robot has already moved from $(0,0)$ to $(1,0)$ to $(2,0)$).
-
-### Detection Event
-
-```
-Replan #1:
-  Trolley detected at : (3, 0)
-  Robot was at        : (2, 0)
-```
-
-The robot's lookahead sensor detected the trolley at $(3, 0)$ while positioned at $(2, 0)$. The robot halted without entering the blocked cell.
-
-### Replanned Route
-
-A* from $(2, 0)$ on the updated map (with $(3, 0)$ marked as `T`) found an alternative path:
-
-```
-(2,0) → (2,1) → (3,1) → (3,2) → (3,3) → (3,4) → (3,5) → (3,6) →
-(4,6) → (5,6) → (6,6) → (7,6) → (8,6) → (8,7) → (9,7) → (9,8) → (9,9)
-```
-
-| Metric | Value |
-|--------|-------|
-| Replan path moves | **16** |
-| Replan path cost | **19.0** |
-| Replan nodes expanded | **37** |
-
-### Visualisation: Before and After
-
-**Initial A* plan (trolley unknown):**
-```
+```text
    0 1 2 3 4 5 6 7 8 9
- 0 S . # . . . . C . .
- 1 * . # . . # . . . .
- 2 * . # . . # . C . .
- 3 * . . . C . . . . .     ← Robot plans to pass through (3,0)
- 4 * # # # # # . . . .
- 5 * . C . . . . . . .
- 6 * . . . # . . . . .
- 7 * C . . # . . C . .
- 8 * . . . # * * * . .
- 9 * * * * * * # * * G
-```
-
-**Replanned route (after detecting trolley at $(3, 0)$):**
-```
-   0 1 2 3 4 5 6 7 8 9
- 0 S . # . . . . C . .
+ 0 S . # . . . . C . R
  1 . . # . . # . . . .
- 2 * * # . . # . C . .     ← Robot at (2,0), pivots right
- 3 T * * * * * * . . .     ← Trolley blocks (3,0); bypass via row 3
+ 2 * * # . . # . C R .
+ 3 T * * * * * * . . .
  4 . # # # # # * . . .
  5 . . C . . . * . . .
- 6 . . . . # . * . . .
+ 6 . . . . # . * . R .
  7 . C . . # . * C . .
- 8 . . . . # . * * . .
+ 8 . . . . # . * * R .
  9 . . . . . . # * * G
 ```
 
-### Full Robot Trace
+Cost of resilience: the tail the robot ends up walking costs 19.0 against the 18.0 tail of the
+blocked plan — one extra cost unit, and the delivery still happens.
 
-The actual path the robot traversed (combining the initial steps before detection and the replanned route after):
-
-```
-(0,0) → (1,0) → (2,0) → (2,1) → (3,1) → (3,2) → (3,3) → (3,4) →
-(3,5) → (3,6) → (4,6) → (5,6) → (6,6) → (7,6) → (8,6) → (8,7) →
-(9,7) → (9,8) → (9,9)
-```
-
-**Total moves in full trace:** 18 moves  
-**Number of replans:** 1  
-**Outcome:** ✓ **GOAL REACHED**
-
----
-
-## 4.6 Trolley Replanning Metrics
-
-```
+```text
 ═══════════════════════════════════════════════════════
   TROLLEY REPLANNING METRICS
 ═══════════════════════════════════════════════════════
@@ -249,62 +133,84 @@ The actual path the robot traversed (combining the initial steps before detectio
   Goal reached                   Yes ✓
     Replan #1 cost               19.0
     Replan #1 moves              16
-    Replan #1 nodes              37
+    Replan #1 nodes              34
 ═══════════════════════════════════════════════════════
 ```
 
 ---
 
-## 4.7 Edge Case: No Alternative Route
+## 4.5 The failure case: no alternative route
 
-If the trolley were placed such that it completely blocks all routes to the goal, the replan would return `None`:
+The task requires reporting when no alternative exists, so the project ships a one-cell-wide
+serpentine corridor (`BOTTLENECK_LAYOUT`) whose goal has exactly one approach:
 
-```python
-if new_path is None:
-    # Dead end — no alternative route
-    break
+```text
+   0 1 2 3 4 5 6
+ 0 S . . . . . #
+ 1 # # # # # . #
+ 2 # . . . . . #
+ 3 # . # # # # #
+ 4 # . . . . . #
+ 5 # # # # # . #
+ 6 # . . . . G #
 ```
 
-The simulation would report:
-```
-*** NO ALTERNATIVE PATH — destination unreachable ***
-Outcome: ✗ GOAL NOT REACHED
+Because the state graph is undirected, every cell on that single corridor is an articulation
+point: blocking one disconnects `G` completely.
+
+| Event | Detail |
+|---|---|
+| Initial plan | 19 moves, cost 19.0 |
+| Trolley | (0,3), hidden |
+| Detection | at (0,3) from (0,2) |
+| Replan | **no path** — `astar()` returns `None` |
+| Outcome | robot halts, reports the destination unreachable |
+
+```text
+  ── Replan #1 ──
+     Trolley detected at : (0, 3)
+     Robot was at        : (0, 2)
+     *** NO ALTERNATIVE PATH — destination unreachable ***
 ```
 
-This case is handled gracefully in the code and tested in the unit test suite.
+The simulator does not silently give up: `replan_count` still increments, the `ReplanEvent`
+records `new_path = None`, and `goal_reached` is `False`. The robot never enters the blocked
+cell, which the test suite asserts directly.
 
 ---
 
-## 4.8 Design Decisions
+## 4.6 Design decisions
 
-1. **One-step lookahead** (not full visibility): The robot detects obstacles only one cell ahead, modelling realistic sensor range. It does not scan the entire grid before each step.
-
-2. **Replan from current position** (not from start): When a replan is triggered, A* starts from the robot's current cell, not from $S$. This avoids backtracking to the start and simulates online replanning as it would occur in a real robotic system.
-
-3. **Trolley auto-placement on the initial path**: The default simulator places the trolley on the 4th cell of the initial A* path, guaranteeing that a replan will be triggered. Users can also specify custom trolley positions.
-
-4. **Multiple trolleys supported**: The `trolley_positions` parameter accepts a list, so multiple trolleys can be placed. The simulation handles multiple detection-and-replan cycles sequentially.
-
----
-
-## 4.9 Unit Tests
-
-| Test | Verification |
-|------|-------------|
-| `test_simulation_runs` | The simulation completes without exceptions. |
-| `test_replan_count_positive` | At least 1 replan occurs when a trolley is placed. |
-| `test_goal_reachable_without_trolley` | With `trolley_positions=[]`, the goal is always reached (baseline sanity check). |
-| `test_custom_trolley_position` | Placing a trolley at the 3rd cell of the initial path causes exactly 1 replan. |
-| `test_trace_starts_at_start` | The robot's full trace always begins at $S = (0, 0)$. |
+1. **One-step lookahead, not full visibility.** The robot inspects only the next cell, which is
+   the realistic sensor model and makes detection timing meaningful.
+2. **Replan from the current cell.** Replanning from `S` would produce a route the robot cannot
+   reach without backtracking through cells it has already left.
+3. **Detection compares `real_grid` with `known_grid`.** Without the second half of that test a
+   permanently blocked cell would trigger a fresh replan on every visit.
+4. **Auto-placement on the plan.** Guarantees the demo exercises a replan; positional overrides
+   allow experiments with several trolleys.
+5. **Undirected graph ⇒ honest failure.** Blocking a bridge really does make the goal
+   unreachable, so "no path" is a genuine result rather than a search bug.
 
 ---
 
-## 4.10 Visual Output
+## 4.7 Tests
 
-A 3-panel figure is saved as [`screenshots/trolley_replanning.png`](../screenshots/trolley_replanning.png):
+| Test | Verifies |
+|---|---|
+| `test_simulation_runs` | The simulation completes without exceptions |
+| `test_replan_count_positive` | A placed trolley causes at least one replan |
+| `test_goal_reachable_without_trolley` | With `trolley_positions=[]` the goal is always reached |
+| `test_custom_trolley_position` | A trolley on the third cell triggers exactly one replan |
+| `test_trace_starts_at_start` | The executed trace begins at `S` |
+| `test_replan_reports_unreachable` | Blocked corridor ⇒ 1 replan, `new_path is None`, goal not reached |
+| `test_robot_never_enters_the_blocked_cell` | The trolley cell is absent from `final_trace` |
 
-| Panel | Content |
-|-------|---------|
-| **Left** | Initial A* plan with trolley position marked (✕). |
-| **Middle** | Replanned route after detection, with trolley cell highlighted in red. |
-| **Right** | Full robot trace (combined pre-detection + post-detection path). |
+---
+
+## 4.8 Visual output
+
+* [`screenshots/trolley_replanning.png`](../screenshots/trolley_replanning.png) — initial plan,
+  detection, replanned route, executed trace.
+* [`screenshots/no_alternative_path.png`](../screenshots/no_alternative_path.png) — the blocked
+  corridor and the failed replan.

@@ -4,12 +4,16 @@ warehouse_grid.py
 Task 1 & 2 – Warehouse Environment & Problem Formulation
 Author   : Dev Goyal (BT24CSD029)
 Project  : AI-Based Route Planning for a Warehouse Delivery Robot
+
+The warehouse floor is a rectangular grid of single-character cells.  This
+module owns the cell vocabulary, the traversal cost model, the 4-connected
+movement rules, the display routine and the dynamic map update used by the
+trolley replanning task.
 """
 
 from __future__ import annotations
-from typing import List, Tuple, Optional, Dict
+from typing import Dict, List, Optional, Tuple
 import copy
-import numpy as np
 
 # ---------------------------------------------------------------------------
 # Cell-type constants
@@ -49,6 +53,7 @@ class WarehouseGrid:
     ----------
     layout : list of str
         Each string is one row; every character is a cell symbol.
+        All rows must have the same length.
 
     Task 2 – Problem Formulation
     ----------------------------
@@ -61,8 +66,15 @@ class WarehouseGrid:
     """
 
     def __init__(self, layout: List[str]) -> None:
+        if not layout:
+            raise ValueError("Layout must contain at least one row")
+        widths = {len(row) for row in layout}
+        if len(widths) != 1:
+            raise ValueError(
+                f"All rows must have the same width, got widths {sorted(widths)}"
+            )
         self.rows = len(layout)
-        self.cols = len(layout[0])
+        self.cols = widths.pop()
         # Store as mutable list-of-lists for dynamic updates
         self._grid: List[List[str]] = [list(row) for row in layout]
         self.start: Tuple[int, int] = self._find(START)
@@ -95,6 +107,10 @@ class WarehouseGrid:
     def entry_cost(self, r: int, c: int) -> float:
         sym = self._grid[r][c]
         return CELL_COST.get(sym, float('inf'))
+
+    def count(self, symbol: str) -> int:
+        """Number of cells carrying *symbol* (used by the report and plots)."""
+        return sum(row.count(symbol) for row in self._grid)
 
     # ------------------------------------------------------------------
     # Task 2 – actions & transition
@@ -150,12 +166,14 @@ class WarehouseGrid:
                 label: str = '') -> None:
         """Print grid to console; optionally highlight a path with '*'."""
         path_set = set(path or [])
+        width = self.cols * 2 + 1
         if label:
-            print(f"\n{'─' * (self.cols * 2 + 1)}")
+            print(f"\n{'─' * width}")
             print(f" {label}")
-            print(f"{'─' * (self.cols * 2 + 1)}")
-        # Column numbers
-        print("   " + " ".join(str(c % 10) for c in range(self.cols)))
+            print(f"{'─' * width}")
+        # Column numbers (two characters wide, so column 10 is not ambiguous)
+        header = "   " + " ".join(f"{c % 10}" for c in range(self.cols))
+        print(header)
         for r in range(self.rows):
             row_str = f"{r:2} "
             for c in range(self.cols):
@@ -164,7 +182,7 @@ class WarehouseGrid:
                     row_str += '* '
                 else:
                     row_str += sym + ' '
-            print(row_str)
+            print(row_str.rstrip())
         print()
 
     def __repr__(self) -> str:
@@ -173,26 +191,44 @@ class WarehouseGrid:
 
 # ---------------------------------------------------------------------------
 # Default 10×10 warehouse layout used in all demos
+#
+#   S  start (packing station)      G  goal (dispatch dock)
+#   #  shelf                        R  restricted zone
+#   C  crowded aisle (cost 4)       .  open aisle (cost 1)
 # ---------------------------------------------------------------------------
 DEFAULT_LAYOUT = [
-    "S.#....C..",
+    "S.#....C.R",
     "..#..#....",
-    "..#..#.C..",
+    "..#..#.CR.",
     "....C.....",
     ".#####....",
     "..C.......",
-    "....#.....",
+    "....#...R.",
     ".C..#..C..",
-    "....#.....",
+    "....#...R.",
     "......#..G",
 ]
 
-# A second layout to illustrate cost-vs-moves trade-off (Task 3 test case)
+# A second layout to illustrate the cost-vs-moves trade-off (Task 3 test case).
+# Row 0 is the fewest-moves route but crosses four crowded cells (cost 4 each);
+# row 1 is a 2-move-longer detour made entirely of open aisles (cost 1 each).
 COST_TEST_LAYOUT = [
-    "S...CCCC.G",
+    "S.CCCC....G",
     "...........",
 ]
-# Note: intentionally narrow so short path is costly (via CCCC)
+
+# A one-cell-wide serpentine corridor (Task 4 "no alternative route" case).
+# Blocking any cell on the route disconnects the goal completely, so replanning
+# must report that the destination is unreachable.
+BOTTLENECK_LAYOUT = [
+    "S.....#",
+    "#####.#",
+    "#.....#",
+    "#.#####",
+    "#.....#",
+    "#####.#",
+    "#....G#",
+]
 
 
 def make_default_grid() -> WarehouseGrid:

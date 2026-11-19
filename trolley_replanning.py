@@ -2,7 +2,7 @@
 trolley_replanning.py
 =====================
 Task 4 – Trolley Detection, Map Update & A* Replanning
-Author   : Piyush Mangalam (BT24CSD033)
+Author   : Piyush Mangalam (BT24CSD032)
 Project  : AI-Based Route Planning for a Warehouse Delivery Robot
 """
 

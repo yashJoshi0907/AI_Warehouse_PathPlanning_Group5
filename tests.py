@@ -6,6 +6,8 @@ Author   : Sayan Majhi (BT24CSD028)
 Project  : AI-Based Route Planning for a Warehouse Delivery Robot
 
 Run with:
+    python -m unittest tests.py -v
+  or:
     python -m pytest tests.py -v
   or:
     python tests.py
@@ -15,12 +17,14 @@ from __future__ import annotations
 import unittest
 
 from warehouse_grid import (
-    WarehouseGrid, make_default_grid,
+    WarehouseGrid, make_default_grid, DEFAULT_LAYOUT,
+    COST_TEST_LAYOUT, BOTTLENECK_LAYOUT,
     OPEN, CROWDED, SHELF, RESTRICTED, START, GOAL, TROLLEY,
     CELL_COST, IMPASSABLE
 )
-from search_algorithms import bfs, dfs, greedy, astar, run_all, manhattan
+from search_algorithms import bfs, dfs, greedy, astar, run_all, manhattan, ALGORITHMS
 from trolley_replanning import TrolleySimulator
+from metrics import benchmark
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +53,15 @@ CROWDED_LAYOUT = [
 DETOUR_LAYOUT = [
     "S.CCCCG",
     ".......",
+]
+
+# A narrow map with a restricted zone guarding one of two approaches
+RESTRICTED_LAYOUT = [
+    "S..R.",
+    "###R.",
+    "...R.",
+    "###.#",
+    "....G",
 ]
 
 
@@ -309,6 +322,88 @@ class TestRunAll(unittest.TestCase):
         g = make_default_grid()
         for r in run_all(g):
             self.assertTrue(r.goal_reached, msg=f"{r.algorithm} failed to find path")
+
+
+class TestLayoutValidation(unittest.TestCase):
+
+    def test_ragged_layout_rejected(self):
+        with self.assertRaises(ValueError):
+            WarehouseGrid(["S..", "..G.."])
+
+    def test_empty_layout_rejected(self):
+        with self.assertRaises(ValueError):
+            WarehouseGrid([])
+
+    def test_missing_goal_rejected(self):
+        with self.assertRaises(ValueError):
+            WarehouseGrid(["S..", "..."])
+
+
+class TestDefaultEnvironment(unittest.TestCase):
+
+    def test_default_grid_uses_every_cell_type(self):
+        g = make_default_grid()
+        self.assertGreaterEqual(g.count(OPEN), 1)
+        self.assertGreaterEqual(g.count(CROWDED), 1)
+        self.assertGreaterEqual(g.count(SHELF), 1)
+        self.assertGreaterEqual(g.count(RESTRICTED), 1)
+
+    def test_default_grid_is_solvable(self):
+        self.assertTrue(astar(make_default_grid()).goal_reached)
+
+    def test_restricted_zone_is_impassable(self):
+        g = WarehouseGrid(RESTRICTED_LAYOUT)
+        self.assertFalse(g.is_passable(0, 3))
+        self.assertFalse(g.is_passable(1, 3))
+        self.assertTrue(g.is_passable(0, 2))
+
+
+class TestCostVsMoves(unittest.TestCase):
+
+    def test_bfs_fewest_moves_but_higher_cost(self):
+        g = WarehouseGrid(COST_TEST_LAYOUT)
+        b = bfs(g)
+        self.assertEqual(b.path_length, 10)
+        self.assertEqual(b.path_cost, 22.0)
+
+    def test_astar_takes_detour_to_save_cost(self):
+        g = WarehouseGrid(COST_TEST_LAYOUT)
+        a = astar(g)
+        self.assertEqual(a.path_length, 12)
+        self.assertEqual(a.path_cost, 12.0)
+        self.assertLess(a.path_cost, bfs(g).path_cost)
+
+
+class TestNoAlternativeRoute(unittest.TestCase):
+
+    def test_replan_reports_unreachable(self):
+        sim = TrolleySimulator(WarehouseGrid(BOTTLENECK_LAYOUT))
+        result = sim.run()
+        self.assertEqual(result.replan_count, 1)
+        self.assertFalse(result.goal_reached)
+        self.assertIsNone(result.replan_events[0].new_path)
+
+    def test_robot_never_enters_the_blocked_cell(self):
+        sim = TrolleySimulator(WarehouseGrid(BOTTLENECK_LAYOUT))
+        result = sim.run()
+        self.assertTrue(sim.trolley_positions)
+        self.assertNotIn(sim.trolley_positions[0], result.final_trace)
+
+
+class TestBenchmark(unittest.TestCase):
+
+    def test_benchmark_covers_all_algorithms(self):
+        results = benchmark(make_default_grid(), repeats=2)
+        self.assertEqual([r.algorithm for r in results], list(ALGORITHMS))
+
+    def test_benchmark_keeps_deterministic_metrics(self):
+        g = make_default_grid()
+        for res in benchmark(g, repeats=2):
+            single = ALGORITHMS[res.algorithm](g)
+            self.assertEqual(res.path_length, single.path_length)
+            self.assertEqual(res.path_cost, single.path_cost)
+            self.assertEqual(res.nodes_expanded, single.nodes_expanded)
+            self.assertGreater(res.elapsed_sec, 0.0)
 
 
 # ---------------------------------------------------------------------------

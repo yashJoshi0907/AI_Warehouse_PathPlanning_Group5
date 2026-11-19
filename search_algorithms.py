@@ -4,7 +4,7 @@ search_algorithms.py
 Task 3 – BFS, DFS, Greedy Best-First Search, and A*
 Author   : Yash Joshi (BT24CSD024) – BFS & DFS
            Yuvraj Singh (BT24CSD031) – Greedy Best-First Search & heuristic
-           Harsh Patil  (BT24CSD032) – A* & weighted path costs
+           Harsh Patil  (BT24CSD033) – A* & weighted path costs
 Project  : AI-Based Route Planning for a Warehouse Delivery Robot
 """
 
@@ -195,7 +195,7 @@ def greedy(grid: WarehouseGrid) -> SearchResult:
 
 
 # ---------------------------------------------------------------------------
-# 4. A* Search  (Harsh Patil – BT24CSD032)
+# 4. A* Search  (Harsh Patil – BT24CSD033)
 # ---------------------------------------------------------------------------
 
 def astar(grid: WarehouseGrid,
@@ -260,11 +260,16 @@ def astar(grid: WarehouseGrid,
 # Convenience: run all four algorithms on one grid
 # ---------------------------------------------------------------------------
 
+# Registry used by the GUI, the benchmark and the comparison tables.
+# Order matters: it fixes the display order everywhere.
+ALGORITHMS = {
+    'BFS':    bfs,
+    'DFS':    dfs,
+    'Greedy': greedy,
+    'A*':     astar,
+}
+
+
 def run_all(grid: WarehouseGrid) -> List[SearchResult]:
     """Run BFS, DFS, Greedy, and A* on *grid*; return list of SearchResults."""
-    return [
-        bfs(grid),
-        dfs(grid),
-        greedy(grid),
-        astar(grid),
-    ]
+    return [fn(grid) for fn in ALGORITHMS.values()]
